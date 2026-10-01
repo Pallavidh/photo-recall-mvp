@@ -56,7 +56,12 @@ ss = st.session_state
 ss.setdefault("attempt", None)
 ss.setdefault("log", [])
 ss.setdefault("calls", 0)
-
+import glob, zipfile
+   if not os.path.exists(LIB_FILE):
+       for z in sorted(glob.glob("library*.zip")):
+           with zipfile.ZipFile(z) as zf:
+               zf.extractall(".")
+           break
 if not os.path.exists(LIB_FILE):
     st.error("No photo library found. Run prepare_library.py and add the library folder to the repo.")
     st.stop()
