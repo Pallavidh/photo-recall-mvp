@@ -248,7 +248,7 @@ st.title("Find a photo")
 
 with st.form("search", clear_on_submit=False):
     q_text = st.text_input("Describe the photo you're looking for",
-                           placeholder='e.g. "biryani in Hyderabad" or "me in a yellow dress"')
+                          placeholder='e.g. "Ganesh festival" or "the beach in France"')
     if st.form_submit_button("Search", type="primary") and q_text.strip():
         new_attempt(q_text.strip())
 
