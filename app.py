@@ -1,16 +1,18 @@
 """
-Ask a Question Back — MVP (Phase 1: Path A and Path C).
+Ask a Question Back — MVP, styled as the Ask Photos screen on an Android phone.
 
 Path A: 20+ photos -> photos plus a narrowing question; answers become filters (max 3).
-Path C: fewer than 20 -> just the photos, then "Did you find it?". "No" searches more broadly and asks.
-The user can pick a photo or end the search at any point.
+Path C: fewer than 20 -> just the photos, then "Did you find it?". "Keep looking" searches more widely.
+Tap a photo to open it; "This is the one" ends the search. The user can end the search at any time.
 """
 
 import csv
+import glob
 import io
 import json
 import os
 import time
+import zipfile
 from datetime import datetime
 
 import streamlit as st
@@ -18,12 +20,47 @@ import streamlit as st
 import mvp_logic as L
 import search as S
 
-st.set_page_config(page_title="Find a photo", page_icon="🔍", layout="wide")
+st.set_page_config(page_title="Ask Photos prototype", page_icon="🔍", layout="centered",
+                   initial_sidebar_state="collapsed")
 
 LIB_DIR = "library"
 LIB_FILE = os.path.join(LIB_DIR, "library.json")
-PAGE = 20              # photos shown before "+N more"
+PAGE = 21              # photos shown before "+N more" (7 rows of 3)
 MAX_CALLS = 60         # AI calls per visit, protects the API budget
+
+# ---------------------------------------------------------------- phone styling
+
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Roboto:wght@400;500&display=swap');
+html, body, [class*="st-"], button, input { font-family: 'Roboto', system-ui, sans-serif !important; }
+[data-testid="stAppViewContainer"] { background: #E8EAED; }
+header[data-testid="stHeader"] { background: transparent; }
+.block-container {
+  max-width: 400px !important; background: #FFFFFF; border: 1px solid #DADCE0;
+  border-radius: 32px; padding: 1.2rem 0.8rem 1.6rem !important; margin-top: 1.2rem;
+}
+h1 { font-size: 22px !important; font-weight: 500 !important; padding: 0 0 0.2rem !important; color: #202124; }
+[data-testid="stHorizontalBlock"] { flex-wrap: nowrap !important; gap: 3px !important; }
+[data-testid="stColumn"], [data-testid="column"] { min-width: 0 !important; flex: 1 1 0 !important; width: auto !important; }
+.st-key-grid img { width: 100% !important; aspect-ratio: 1 / 1; object-fit: cover; border-radius: 2px; }
+.st-key-grid [data-testid="stVerticalBlock"] { gap: 0 !important; }
+.st-key-grid button { font-size: 12px !important; color: #1A73E8 !important; padding: 0 !important; min-height: 24px !important; }
+.st-key-searchbar [data-testid="stTextInput"] input {
+  border-radius: 24px !important; background: #F1F3F4 !important; border: none !important;
+  padding: 10px 16px !important; font-size: 15px !important;
+}
+.st-key-searchbar [data-testid="stTextInput"] > div { border: none !important; background: transparent !important; }
+.st-key-searchbar [data-testid="stFormSubmitButton"] button { border-radius: 20px !important; }
+.st-key-question { background: #E8F0FE; border-radius: 16px; padding: 10px 12px 6px; margin: 4px 0 6px; }
+.st-key-question p { color: #174EA6; }
+.st-key-confirm { background: #F1F3F4; border-radius: 16px; padding: 10px 12px; margin-top: 8px; }
+.st-key-filters button { border-radius: 16px !important; }
+.stButton button, [data-testid="stBaseButton-pills"], [data-testid="stBaseButton-pillsActive"] { border-radius: 18px !important; }
+.small-grey { font-size: 13px; color: #5F6368; margin: 2px 2px 4px; }
+.meta { font-size: 13px; color: #5F6368; margin: 6px 2px; }
+</style>
+""", unsafe_allow_html=True)
 
 
 # ---------------------------------------------------------------- setup
@@ -51,66 +88,67 @@ def load_library(path, mtime):
     return sorted(photos, key=lambda p: p.get("date") or "", reverse=True)
 
 
-client = get_client()
-ss = st.session_state
-ss.setdefault("attempt", None)
-ss.setdefault("log", [])
-ss.setdefault("calls", 0)
-import glob, zipfile
 if not os.path.exists(LIB_FILE):
     for z in sorted(glob.glob("library*.zip")):
         with zipfile.ZipFile(z) as zf:
             zf.extractall(".")
         break
-
 if not os.path.exists(LIB_FILE):
-    st.error("No photo library found. Run prepare_library.py and add the library folder to the repo.")
+    st.error("No photo library found. Add the library folder or library.zip to the repo.")
     st.stop()
+
+client = get_client()
 LIB = load_library(LIB_FILE, os.path.getmtime(LIB_FILE))
 BY_ID = {p["id"]: p for p in LIB}
+
+ss = st.session_state
+ss.setdefault("attempt", None)
+ss.setdefault("log", [])
+ss.setdefault("calls", 0)
 
 
 def budget_ok(cost=1):
     if client is None:
-        st.error("Searching is off because no API key is set.")
+        ss["error"] = "Searching is off because no API key is set."
         return False
     if ss.calls + cost > MAX_CALLS:
-        st.warning("This prototype allows a limited number of searches per visit. Refresh the page to continue.")
+        ss["error"] = "This prototype allows a limited number of searches per visit. Refresh the page to continue."
         return False
     return True
 
 
+def pretty_date(d):
+    try:
+        return datetime.strptime(d, "%Y-%m-%d").strftime("%d %b %Y")
+    except Exception:
+        return d or ""
+
+
+def img_path(p):
+    return os.path.join(LIB_DIR, p["file"])
+
+
 # ---------------------------------------------------------------- state changes
 
-def new_attempt(query):
-    if not budget_ok():
+def run_search():
+    query = (ss.get("q_input") or "").strip()
+    if not query or not budget_ok():
         return
     try:
         res = S.search(client, LIB, query)
     except Exception as e:
-        st.session_state["error"] = f"The search didn't go through ({e}). Try again."
+        ss["error"] = f"The search didn't go through ({e}). Try again."
         return
     ss.calls += 1
     filters = L.clue_filters(res["clues"])
     photos = L.apply_filters([BY_ID[i] for i in res["ids"]], filters)
     ss.attempt = {
-        "query": query,
-        "ids": res["ids"],
-        "filters": filters,
-        "skip": [f["attr"] for f in filters],
-        "asked": 0,
-        "broad": False,
-        "said_no": False,
-        "answers": [],
-        "started": time.time(),
-        "first_count": len(photos),
+        "query": query, "ids": res["ids"], "filters": filters,
+        "skip": [f["attr"] for f in filters], "asked": 0, "broad": False, "said_no": False,
+        "answers": [], "started": time.time(), "first_count": len(photos),
         "path": "A" if L.needs_question(photos, 0) else "C",
-        "shown": PAGE,
-        "q": None,
-        "q_key": None,
-        "done": False,
-        "outcome": None,
-        "found_id": None,
+        "shown": PAGE, "q": None, "q_key": None, "viewing": None,
+        "opened": [], "backs": 0, "done": False, "outcome": None, "found_id": None,
     }
 
 
@@ -132,9 +170,12 @@ def question_now(a, photos):
     return q
 
 
-def answer(option):
+def on_answer(widget_key):
+    option = ss.get(widget_key)
     a = ss.attempt
     q = a["q"]
+    if not option or not q:
+        return
     f = L.answer_to_filter(q, option)
     if f:
         a["filters"].append(f)
@@ -145,22 +186,34 @@ def answer(option):
     a["q_key"] = None
 
 
-def remove_filter(i):
+def on_remove_filter(widget_key):
+    label = ss.get(widget_key)
     a = ss.attempt
-    f = a["filters"].pop(i)
-    if f["attr"] in a["skip"]:
-        a["skip"].remove(f["attr"])
-    a["answers"].append(f"Removed: {L.filter_label(f)}")
+    for i, f in enumerate(a["filters"]):
+        if f"{L.filter_label(f)}  ✕" == label:
+            a["filters"].pop(i)
+            if f["attr"] in a["skip"]:
+                a["skip"].remove(f["attr"])
+            a["answers"].append(f"Removed: {L.filter_label(f)}")
+            break
     a["shown"] = PAGE
     a["q_key"] = None
 
 
-def found(pid):
-    finish("Found (picked a photo)", pid)
+def open_photo(pid):
+    a = ss.attempt
+    a["viewing"] = pid
+    a["opened"].append(pid)
 
 
-def said_yes():
-    finish("Found (said yes)")
+def back_to_results():
+    a = ss.attempt
+    a["viewing"] = None
+    a["backs"] += 1
+
+
+def more():
+    ss.attempt["shown"] += PAGE
 
 
 def said_no():
@@ -173,35 +226,32 @@ def said_no():
     try:
         res = S.search(client, LIB, a["query"], broad=True)
     except Exception as e:
-        st.session_state["error"] = f"The wider search didn't go through ({e}). Try again."
+        ss["error"] = f"The wider search didn't go through ({e}). Try again."
         return
     ss.calls += 1
-    merged = list(dict.fromkeys(a["ids"] + res["ids"]))
-    a["ids"] = merged
+    a["ids"] = list(dict.fromkeys(a["ids"] + res["ids"]))
     a["broad"] = True
     a["said_no"] = True
-    a["answers"].append("Said: not found")
+    a["answers"].append("Said: keep looking")
     a["shown"] = PAGE
     a["q_key"] = None
 
 
-def end_search():
-    finish("Ended search")
-
-
 def finish(outcome, pid=None):
     a = ss.attempt
-    a["done"] = True
-    a["outcome"] = outcome
-    a["found_id"] = pid
+    a.update(done=True, outcome=outcome, found_id=pid, viewing=None)
     ss.log.append({
         "tester": ss.get("tester", ""),
         "time": datetime.now().strftime("%Y-%m-%d %H:%M"),
         "search": a["query"],
         "first_results": a["first_count"],
         "path": a["path"],
-        "said_not_found": "yes" if a["said_no"] else "no",
+        "said_keep_looking": "yes" if a["said_no"] else "no",
         "questions_answered": a["asked"],
+        "photos_opened": len(a["opened"]),
+        "back_outs": a["backs"],
+        "first_photo_was_kept": ("yes" if pid and a["opened"] and a["opened"][0] == pid else
+                                 "no" if a["opened"] else ""),
         "steps": " | ".join(a["answers"]),
         "outcome": outcome,
         "photo": pid or "",
@@ -211,25 +261,17 @@ def finish(outcome, pid=None):
 
 def reset():
     ss.attempt = None
+    ss["q_input"] = ""
 
 
-def pretty_date(d):
-    try:
-        return datetime.strptime(d, "%Y-%m-%d").strftime("%d %b %Y")
-    except Exception:
-        return d or ""
-
-
-# ---------------------------------------------------------------- sidebar
+# ---------------------------------------------------------------- sidebar (outside the phone)
 
 with st.sidebar:
     st.header("About this prototype")
-    st.write("Search this sample photo library the way you'd search your own. "
-             "When there are lots of results, it asks one question at a time to narrow them down. "
-             "You can pick a photo or end the search whenever you like.")
-    st.text_input("Your name (for the test log)", key="tester")
+    st.write("Ask Photos with one addition: when a search returns lots of photos, it asks one question at a "
+             "time to narrow them down. Every answer becomes a filter you can remove.")
+    st.text_input("Tester name (for the test log)", key="tester")
     st.caption(f"Library: {len(LIB)} photos · AI calls this visit: {ss.calls} of {MAX_CALLS}")
-
     st.header("Test log")
     if ss.log:
         st.dataframe(ss.log, hide_index=True)
@@ -242,99 +284,105 @@ with st.sidebar:
         st.caption("Each finished search is recorded here.")
 
 
-# ---------------------------------------------------------------- main
+# ---------------------------------------------------------------- the phone screen
 
-st.title("Find a photo")
+a = ss.attempt
 
-with st.form("search", clear_on_submit=False):
-    q_text = st.text_input("Describe the photo you're looking for",
-                          placeholder='e.g. "Ganesh festival" or "the beach in France"')
-    if st.form_submit_button("Search", type="primary") and q_text.strip():
-        new_attempt(q_text.strip())
+# full-screen photo view
+if a and not a["done"] and a["viewing"]:
+    p = BY_ID[a["viewing"]]
+    st.button("← Back to results", type="tertiary", on_click=back_to_results)
+    st.image(img_path(p))
+    st.markdown(f"<p class='meta'>{pretty_date(p.get('date'))} · {p.get('place') or 'Unknown place'}</p>",
+                unsafe_allow_html=True)
+    st.button("This is the one", type="primary", on_click=finish,
+              args=("Found (picked a photo)", p["id"]))
+    st.stop()
+
+st.title("Ask Photos")
+
+with st.form("search", clear_on_submit=False, border=False):
+    with st.container(key="searchbar"):
+        c1, c2 = st.columns([5, 1.4])
+        c1.text_input("Search", key="q_input", label_visibility="collapsed",
+                      placeholder="Ganesh festival · the beach in France")
+        c2.form_submit_button("Search", type="primary", on_click=run_search)
 
 if ss.get("error"):
     st.error(ss.pop("error"))
 
-a = ss.attempt
 if a is None:
-    st.write("Try describing a photo the way you'd remember it — a place, a meal, an occasion, roughly when.")
+    st.markdown("<p class='small-grey'>Describe a photo the way you remember it: an occasion, a place, "
+                "roughly when.</p>", unsafe_allow_html=True)
     st.stop()
 
-# ----- finished
+# finished
 if a["done"]:
     if a["found_id"]:
         p = BY_ID[a["found_id"]]
-        secs = ss.log[-1]["seconds"]
-        st.success(f"Found it in {secs} seconds, after {a['asked']} "
+        st.success(f"Found in {ss.log[-1]['seconds']} seconds, after {a['asked']} "
                    f"question{'s' if a['asked'] != 1 else ''}.")
-        st.image(os.path.join(LIB_DIR, p["file"]), width=420)
-        st.caption(f"{pretty_date(p.get('date'))}, {p.get('place') or ''} — {p.get('caption') or ''}")
+        st.image(img_path(p))
     elif a["outcome"].startswith("Found"):
         st.success("Glad you found it.")
     else:
-        st.info("Search ended. Try describing it differently — a person, a place or roughly when.")
-    st.button("Start a new search", on_click=reset, type="primary")
+        st.info("Search ended. Try describing it differently: who was there, the place, or roughly when.")
+    st.button("New search", type="primary", on_click=reset)
     st.stop()
 
 photos = photos_now(a)
 q = question_now(a, photos)
 
-# ----- filters and exit
-top_l, top_r = st.columns([5, 1])
-with top_l:
-    if a["filters"]:
-        st.write("Showing photos that match:")
-        cols = st.columns(min(len(a["filters"]), 6))
-        for i, f in enumerate(a["filters"]):
-            cols[i % len(cols)].button(f"{L.filter_label(f)}  ✕", key=f"f{i}_{len(a['filters'])}",
-                                       on_click=remove_filter, args=(i,),
-                                       help="Remove this filter to see more photos")
-with top_r:
-    st.button("End search", key="end_top", on_click=end_search)
+# filters (tap to remove)
+if a["filters"]:
+    fkey = f"filters_{len(a['filters'])}_{a['asked']}"
+    with st.container(key="filters"):
+        st.pills("Filters", [f"{L.filter_label(f)}  ✕" for f in a["filters"]], key=fkey,
+                 label_visibility="collapsed", on_change=on_remove_filter, args=(fkey,))
 
-st.write(f"**{len(photos)} photo{'s' if len(photos) != 1 else ''}**")
+top_l, top_r = st.columns([3, 1])
+top_l.markdown(f"<p class='small-grey'>{len(photos)} photo{'s' if len(photos) != 1 else ''}</p>",
+               unsafe_allow_html=True)
+top_r.button("End search", type="tertiary", on_click=finish, args=("Ended search",))
 
-# ----- the question (Path A, or after 'not found')
+# the question
 if q:
-    with st.container(border=True):
-        st.subheader(q["question"])
+    qkey = f"q_{a['asked']}_{len(a['filters'])}"
+    with st.container(key="question"):
+        st.markdown(f"**{q['question']}**")
         opts = q["options"] + ([L.OTHER] if q["has_other"] else []) + [L.NOT_SURE]
-        cols = st.columns(len(opts))
-        for i, o in enumerate(opts):
-            cols[i].button(o, key=f"o{a['asked']}_{i}", on_click=answer, args=(o,),
-                           type="primary" if o not in (L.OTHER, L.NOT_SURE) else "secondary")
-        st.caption("Or just pick your photo below.")
+        st.pills("Answer", opts, key=qkey, label_visibility="collapsed",
+                 on_change=on_answer, args=(qkey,))
 
-# ----- empty results
 if not photos:
-    st.info("No photos match. Remove a filter above, or let us look more widely.")
+    st.markdown("<p class='small-grey'>No photos match. Tap a filter to remove it, or keep looking.</p>",
+                unsafe_allow_html=True)
 
-# ----- photo grid
+# photo grid, 3 across
 shown = photos[: a["shown"]]
-for r in range(0, len(shown), 4):
-    cols = st.columns(4)
-    for c, p in zip(cols, shown[r:r + 4]):
-        with c:
-            st.image(os.path.join(LIB_DIR, p["file"]), width=220)
-            st.caption(f"{pretty_date(p.get('date'))}, {p.get('place') or ''}")
-            st.button("This is it", key=f"pick_{p['id']}", on_click=found, args=(p["id"],))
+with st.container(key="grid"):
+    for r in range(0, len(shown), 3):
+        cols = st.columns(3)
+        for c, p in zip(cols, shown[r:r + 3]):
+            with c:
+                st.image(img_path(p))
+                st.button("Open", key=f"open_{p['id']}", type="tertiary",
+                          on_click=open_photo, args=(p["id"],))
 
 if len(photos) > a["shown"]:
-    if st.button(f"+{len(photos) - a['shown']} more"):
-        a["shown"] += PAGE
-        st.rerun()
+    st.button(f"+{len(photos) - a['shown']} more", type="tertiary", on_click=more)
 
-# ----- Path C: no question pending -> confirm
+# few results, or questions used up: a quick check
 if not q:
-    with st.container(border=True):
+    with st.container(key="confirm"):
         if not photos and not a["broad"]:
-            st.write("**Nothing matched closely.**")
-            st.button("Look more widely", on_click=said_no, type="primary")
+            st.markdown("**Nothing matched closely.**")
+            st.button("Keep looking", type="primary", on_click=said_no)
         elif not photos:
-            st.write("**Nothing close to that description in this library.**")
-            st.button("End search", key="end_bottom", on_click=end_search)
+            st.markdown("**Nothing close to that in this library.**")
+            st.button("End search", key="end_bottom", on_click=finish, args=("Not found",))
         else:
-            st.write("**Is it here now?**" if a["broad"] else "**Did you find what you were looking for?**")
+            st.markdown("**Is it here now?**" if a["broad"] else "**Did you find it?**")
             y, n = st.columns(2)
-            y.button("Yes", on_click=said_yes, type="primary")
-            n.button("No, still not here" if a["broad"] else "No, not yet", on_click=said_no)
+            y.button("Yes", type="primary", on_click=finish, args=("Found (said yes)",))
+            n.button("Keep looking", on_click=said_no)
