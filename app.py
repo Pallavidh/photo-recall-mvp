@@ -43,9 +43,18 @@ header[data-testid="stHeader"] { background: transparent; }
 h1 { font-size: 22px !important; font-weight: 500 !important; padding: 0 0 0.2rem !important; color: #202124; }
 [data-testid="stHorizontalBlock"] { flex-wrap: nowrap !important; gap: 3px !important; }
 [data-testid="stColumn"], [data-testid="column"] { min-width: 0 !important; flex: 1 1 0 !important; width: auto !important; }
-.st-key-grid img { width: 100% !important; aspect-ratio: 1 / 1; object-fit: cover; border-radius: 2px; }
-.st-key-grid [data-testid="stVerticalBlock"] { gap: 0 !important; }
-.st-key-grid button { font-size: 12px !important; color: #1A73E8 !important; padding: 0 !important; min-height: 24px !important; }
+[data-testid="InputInstructions"] { display: none !important; }
+.st-key-grid [data-testid="stVerticalBlock"] { gap: 2px !important; }
+.st-key-grid [data-testid="stHorizontalBlock"] { gap: 2px !important; }
+.st-key-grid [data-testid="stColumn"], .st-key-grid [data-testid="column"] { position: relative; }
+.st-key-grid img { width: 100% !important; aspect-ratio: 1 / 1; object-fit: cover; border-radius: 0; display: block; }
+.st-key-grid [data-testid="stElementContainer"]:has(.stButton) { position: absolute; inset: 0; z-index: 2; margin: 0 !important; }
+.st-key-grid .stButton, .st-key-grid .stButton button { width: 100% !important; height: 100% !important; }
+.st-key-grid .stButton button { opacity: 0; cursor: pointer; }
+.st-key-navbar { border-top: 1px solid #DADCE0; margin-top: 18px; padding-top: 8px; }
+.st-key-navbar p { text-align: center; font-size: 12px; color: #5F6368; margin: 0; line-height: 1.5; }
+.st-key-nav_active p { color: #174EA6; font-weight: 500; }
+.st-key-nav_active { background: #D3E3FD; border-radius: 16px; padding: 2px 0; }
 .st-key-searchbar [data-testid="stTextInput"] input {
   border-radius: 24px !important; background: #F1F3F4 !important; border: none !important;
   padding: 10px 16px !important; font-size: 15px !important;
@@ -284,6 +293,17 @@ with st.sidebar:
         st.caption("Each finished search is recorded here.")
 
 
+def bottom_bar():
+    with st.container(key="navbar"):
+        c1, c2, c3 = st.columns(3)
+        c1.markdown(":material/photo_library:  \nPhotos")
+        c2.markdown(":material/collections_bookmark:  \nCollections")
+        with c3:
+            with st.container(key="nav_active"):
+                st.markdown(":material/search:  \nSearch")
+    st.stop()
+
+
 # ---------------------------------------------------------------- the phone screen
 
 a = ss.attempt
@@ -297,7 +317,7 @@ if a and not a["done"] and a["viewing"]:
                 unsafe_allow_html=True)
     st.button("This is the one", type="primary", on_click=finish,
               args=("Found (picked a photo)", p["id"]))
-    st.stop()
+    st.stop()  # full-screen photo: no bottom bar
 
 st.title("Ask Photos")
 
@@ -305,7 +325,7 @@ with st.form("search", clear_on_submit=False, border=False):
     with st.container(key="searchbar"):
         c1, c2 = st.columns([5, 1.4])
         c1.text_input("Search", key="q_input", label_visibility="collapsed",
-                      placeholder="Ganesh festival · the beach in France")
+                      placeholder="Search your photos")
         c2.form_submit_button("Search", type="primary", on_click=run_search)
 
 if ss.get("error"):
@@ -314,7 +334,7 @@ if ss.get("error"):
 if a is None:
     st.markdown("<p class='small-grey'>Describe a photo the way you remember it: an occasion, a place, "
                 "roughly when.</p>", unsafe_allow_html=True)
-    st.stop()
+    bottom_bar()
 
 # finished
 if a["done"]:
@@ -328,7 +348,7 @@ if a["done"]:
     else:
         st.info("Search ended. Try describing it differently: who was there, the place, or roughly when.")
     st.button("New search", type="primary", on_click=reset)
-    st.stop()
+    bottom_bar()
 
 photos = photos_now(a)
 q = question_now(a, photos)
@@ -386,3 +406,5 @@ if not q:
             y, n = st.columns(2)
             y.button("Yes", type="primary", on_click=finish, args=("Found (said yes)",))
             n.button("Keep looking", on_click=said_no)
+
+bottom_bar()
