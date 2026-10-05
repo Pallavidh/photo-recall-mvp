@@ -397,18 +397,9 @@ if a is None:
             st.markdown("<p class='small-grey'>Describe it the way you remember it: the place, what was in it, "
                         "roughly when.</p>", unsafe_allow_html=True)
         bottom_bar()
+    st.markdown("<p class='small-grey'>Describe a photo the way you remember it: an occasion, a place, "
+                "roughly when.</p>", unsafe_allow_html=True)
     st.markdown(f"<p class='small-grey'>{library_summary()}</p>", unsafe_allow_html=True)
-    with st.container(key="challengebtn"):
-        st.markdown("**Test it the real way**")
-        st.markdown("<p class='small-grey'>We show you one photo for a few seconds, then hide it. "
-                    "Try to find it again from memory.</p>", unsafe_allow_html=True)
-        st.button("Start the memory challenge", type="primary", on_click=start_challenge)
-    with st.container(key="tryblock"):
-        st.markdown("**Or just try a search:**")
-        st.pills("Try searching", SUGGESTIONS, key="try_pick", label_visibility="collapsed",
-                 on_change=try_search)
-        st.markdown("<p class='small-grey'>Lots of results? It will ask you a question to narrow them down. "
-                    "Only a few? It checks whether you found it.</p>", unsafe_allow_html=True)
     bottom_bar()
 
 # finished
