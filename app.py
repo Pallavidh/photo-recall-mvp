@@ -11,6 +11,7 @@ import glob
 import io
 import json
 import os
+import random
 import time
 import zipfile
 from datetime import datetime
@@ -67,6 +68,10 @@ h1 { font-size: 22px !important; font-weight: 500 !important; padding: 0 0 0.2re
 .st-key-filters button { border-radius: 16px !important; }
 .stButton button, [data-testid="stBaseButton-pills"], [data-testid="stBaseButton-pillsActive"] { border-radius: 18px !important; }
 .small-grey { font-size: 13px; color: #5F6368; margin: 2px 2px 4px; }
+.st-key-challenge { background: #E8F0FE; border-radius: 16px; padding: 12px 12px 4px; margin: 4px 0 8px; }
+.st-key-challengebtn { background: #E8F0FE; border-radius: 16px; padding: 12px 12px 12px; margin-top: 8px; }
+.st-key-tryblock { background: #F0F4F9; border-radius: 16px; padding: 12px 12px 6px; margin-top: 8px; }
+.st-key-tryblock p { margin-bottom: 4px; }
 .meta { font-size: 13px; color: #5F6368; margin: 6px 2px; }
 </style>
 """, unsafe_allow_html=True)
@@ -114,6 +119,8 @@ ss = st.session_state
 ss.setdefault("attempt", None)
 ss.setdefault("log", [])
 ss.setdefault("calls", 0)
+ss.setdefault("target", None)
+ss.setdefault("showing_target", False)
 
 
 def budget_ok(cost=1):
@@ -265,12 +272,53 @@ def finish(outcome, pid=None):
         "outcome": outcome,
         "photo": pid or "",
         "seconds": round(time.time() - a["started"]),
+        "challenge_photo": ss.target or "",
+        "found_challenge_photo": ("yes" if ss.target and pid == ss.target else
+                                  "no" if ss.target and pid else ""),
     })
 
 
 def reset():
     ss.attempt = None
     ss["q_input"] = ""
+    ss["try_pick"] = None
+    ss.target = None
+
+
+def start_challenge():
+    ss.attempt = None
+    ss["q_input"] = ""
+    ss["try_pick"] = None
+    ss.target = random.choice(LIB)["id"]
+    ss.showing_target = True
+
+
+def library_summary():
+    places = [pl for pl, _ in sorted(
+        ((pl, sum(1 for p in LIB if p.get("place") == pl)) for pl in {p.get("place") for p in LIB if p.get("place")}),
+        key=lambda x: -x[1])]
+    years = sorted({(p.get("date") or "")[:4] for p in LIB if p.get("date")})
+    span = f"{years[0]}–{years[-1]}" if len(years) > 1 else (years[0] if years else "")
+    place_txt = ", ".join(places[:-1]) + (f" and {places[-1]}" if len(places) > 1 else (places[0] if places else ""))
+    return (f"This sample library has {len(LIB)} photos from {span}: trips and days out in {place_txt}, "
+            f"with beaches, mountains, festivals and flowers.")
+
+
+SUGGESTIONS = [
+    "holiday photos",
+    "Ganesh festival",
+    "photos from Berlin",
+    "flowers in the park",
+    "castle in Romania",
+]
+
+
+def try_search():
+    pick = ss.get("try_pick")
+    if not pick:
+        return
+    ss["q_input"] = pick
+    run_search()
 
 
 # ---------------------------------------------------------------- sidebar (outside the phone)
@@ -319,6 +367,17 @@ if a and not a["done"] and a["viewing"]:
               args=("Found (picked a photo)", p["id"]))
     st.stop()  # full-screen photo: no bottom bar
 
+# memory challenge: show a photo briefly, then hide it
+if ss.showing_target and ss.target:
+    p = BY_ID[ss.target]
+    st.title("Remember this photo")
+    st.markdown("<p class='small-grey'>Look closely. It disappears in 6 seconds, "
+                "then you'll try to find it.</p>", unsafe_allow_html=True)
+    st.image(img_path(p))
+    time.sleep(6)
+    ss.showing_target = False
+    st.rerun()
+
 st.title("Ask Photos")
 
 with st.form("search", clear_on_submit=False, border=False):
@@ -332,12 +391,43 @@ if ss.get("error"):
     st.error(ss.pop("error"))
 
 if a is None:
-    st.markdown("<p class='small-grey'>Describe a photo the way you remember it: an occasion, a place, "
-                "roughly when.</p>", unsafe_allow_html=True)
+    if ss.target:
+        with st.container(key="challenge"):
+            st.markdown("**Now find the photo you just saw.**")
+            st.markdown("<p class='small-grey'>Describe it the way you remember it: the place, what was in it, "
+                        "roughly when.</p>", unsafe_allow_html=True)
+        bottom_bar()
+    st.markdown(f"<p class='small-grey'>{library_summary()}</p>", unsafe_allow_html=True)
+    with st.container(key="challengebtn"):
+        st.markdown("**Test it the real way**")
+        st.markdown("<p class='small-grey'>We show you one photo for a few seconds, then hide it. "
+                    "Try to find it again from memory.</p>", unsafe_allow_html=True)
+        st.button("Start the memory challenge", type="primary", on_click=start_challenge)
+    with st.container(key="tryblock"):
+        st.markdown("**Or just try a search:**")
+        st.pills("Try searching", SUGGESTIONS, key="try_pick", label_visibility="collapsed",
+                 on_change=try_search)
+        st.markdown("<p class='small-grey'>Lots of results? It will ask you a question to narrow them down. "
+                    "Only a few? It checks whether you found it.</p>", unsafe_allow_html=True)
     bottom_bar()
 
 # finished
 if a["done"]:
+    if ss.target and a["found_id"]:
+        if a["found_id"] == ss.target:
+            st.success(f"You found it, in {ss.log[-1]['seconds']} seconds after {a['asked']} "
+                       f"question{'s' if a['asked'] != 1 else ''}.")
+            st.image(img_path(BY_ID[ss.target]))
+        else:
+            st.warning("Close, but not the one. This was the photo:")
+            t = BY_ID[ss.target]
+            st.image(img_path(t))
+            st.markdown(f"<p class='meta'>{pretty_date(t.get('date'))} · {t.get('place') or 'Unknown place'}</p>",
+                        unsafe_allow_html=True)
+        c1, c2 = st.columns(2)
+        c1.button("Try another", type="primary", on_click=start_challenge)
+        c2.button("Free search", on_click=reset)
+        bottom_bar()
     if a["found_id"]:
         p = BY_ID[a["found_id"]]
         st.success(f"Found in {ss.log[-1]['seconds']} seconds, after {a['asked']} "
